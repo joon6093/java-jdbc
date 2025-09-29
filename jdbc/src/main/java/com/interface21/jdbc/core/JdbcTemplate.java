@@ -30,7 +30,6 @@ public class JdbcTemplate {
                     throw new DataAccessException("No generated key returned for query: " + sql);
                 }
             }
-
         } catch (SQLException e) {
             throw new DataAccessException("SQL update failed: " + sql, e);
         }
@@ -40,7 +39,11 @@ public class JdbcTemplate {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             setParameters(pstmt, args);
-            pstmt.executeUpdate();
+            int updated = pstmt.executeUpdate();
+            
+            if (updated == 0) {
+                throw new DataAccessException("No rows affected for query: " + sql);
+            }
         } catch (SQLException e) {
             throw new DataAccessException("SQL update failed: " + sql, e);
         }
