@@ -18,6 +18,24 @@ public class JdbcTemplate {
         this.dataSource = dataSource;
     }
 
+    public long updateAndReturnKey(final Connection connection, final String sql, final Object... args) {
+        return execute(
+                connection,
+                sql,
+                (conn, s) -> conn.prepareStatement(s, Statement.RETURN_GENERATED_KEYS),
+                pstmt -> {
+                    pstmt.executeUpdate();
+                    try (var resultSet = pstmt.getGeneratedKeys()) {
+                        if (resultSet.next()) {
+                            return resultSet.getLong(1);
+                        }
+                        throw new DataAccessException("No generated key returned for query: " + sql);
+                    }
+                },
+                args
+        );
+    }
+
     public long updateAndReturnKey(final String sql, final Object... args) {
         return execute(
                 sql,
@@ -33,6 +51,13 @@ public class JdbcTemplate {
                 },
                 args
         );
+    }
+
+    public void update(final Connection connection, final String sql, final Object... args) {
+        final var updated = execute(connection, sql, Connection::prepareStatement, ps -> ps.executeUpdate(), args);
+        if (updated == 0) {
+            throw new DataAccessException("No rows affected for query: " + sql);
+        }
     }
 
     public void update(final String sql, final Object... args) {
@@ -65,6 +90,22 @@ public class JdbcTemplate {
                 },
                 args
         );
+    }
+
+    private <R> R execute(
+            final Connection conn,
+            final String sql,
+            final PreparedStatementFactory factory,
+            final SqlExecutor<R> executor,
+            final Object... args
+    ) {
+        try (var pstmt = factory.create(conn, sql)) {
+            PreparedStatementSetter.of(args)
+                    .setParameters(pstmt);
+            return executor.apply(pstmt);
+        } catch (final SQLException e) {
+            throw new DataAccessException("SQL failed: " + sql, e);
+        }
     }
 
     private <R> R execute(
