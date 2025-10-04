@@ -1,10 +1,11 @@
 package com.interface21.jdbc.core;
 
 import com.interface21.dao.DataAccessException;
+
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import javax.sql.DataSource;
@@ -18,50 +19,26 @@ public class JdbcTemplate {
     }
 
     public long updateAndReturnKey(final String sql, final Object... args) {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
-            setParameters(pstmt, args);
-            pstmt.executeUpdate();
-
-            try (ResultSet rs = pstmt.getGeneratedKeys()) {
-                if (rs.next()) {
-                    return rs.getLong(1);
-                } else {
-                    throw new DataAccessException("No generated key returned for query: " + sql);
-                }
-            }
-        } catch (SQLException e) {
-            throw new DataAccessException("SQL update failed: " + sql, e);
-        }
+        return execute(
+                sql,
+                (conn, s) -> conn.prepareStatement(s, Statement.RETURN_GENERATED_KEYS),
+                pstmt -> {
+                    pstmt.executeUpdate();
+                    try (var resultSet = pstmt.getGeneratedKeys()) {
+                        if (resultSet.next()) {
+                            return resultSet.getLong(1);
+                        }
+                        throw new DataAccessException("No generated key returned for query: " + sql);
+                    }
+                },
+                args
+        );
     }
 
     public void update(final String sql, final Object... args) {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            setParameters(pstmt, args);
-            int updated = pstmt.executeUpdate();
-            
-            if (updated == 0) {
-                throw new DataAccessException("No rows affected for query: " + sql);
-            }
-        } catch (SQLException e) {
-            throw new DataAccessException("SQL update failed: " + sql, e);
-        }
-    }
-
-    public <T> List<T> query(final String sql, final RowMapper<T> rowMapper, final Object... args) {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            setParameters(pstmt, args);
-            try (ResultSet rs = pstmt.executeQuery()) {
-                List<T> results = new ArrayList<>();
-                while (rs.next()) {
-                    results.add(rowMapper.mapRow(rs));
-                }
-                return results;
-            }
-        } catch (SQLException e) {
-            throw new DataAccessException("SQL query failed: " + sql, e);
+        int updated = execute(sql, Connection::prepareStatement, PreparedStatement::executeUpdate, args);
+        if (updated == 0) {
+            throw new DataAccessException("No rows affected for query: " + sql);
         }
     }
 
@@ -73,9 +50,36 @@ public class JdbcTemplate {
         return results.getFirst();
     }
 
-    private void setParameters(final PreparedStatement pstmt, final Object... args) throws SQLException {
-        for (int i = 0; i < args.length; i++) {
-            pstmt.setObject(i + 1, args[i]);
+    public <T> List<T> query(final String sql, final RowMapper<T> rowMapper, final Object... args) {
+        return execute(
+                sql,
+                Connection::prepareStatement,
+                pstmt -> {
+                    try (var resultSet = pstmt.executeQuery()) {
+                        var results = new ArrayList<T>();
+                        while (resultSet.next()) {
+                            results.add(rowMapper.mapRow(resultSet));
+                        }
+                        return results;
+                    }
+                },
+                args
+        );
+    }
+
+    private <R> R execute(
+            final String sql,
+            final PreparedStatementFactory factory,
+            final SqlExecutor<R> executor,
+            final Object... args
+    ) {
+        try (var conn = dataSource.getConnection();
+             var pstmt = factory.create(conn, sql)) {
+            PreparedStatementSetter.of(args)
+                    .setParameters(pstmt);
+            return executor.apply(pstmt);
+        } catch (final SQLException e) {
+            throw new DataAccessException("SQL failed: " + sql, e);
         }
     }
 }
